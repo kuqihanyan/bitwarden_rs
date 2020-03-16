@@ -47,6 +47,7 @@ use std::time::SystemTimeError as TimeErr;
 use u2f::u2ferror::U2fError as U2fErr;
 use yubico::yubicoerror::YubicoError as YubiErr;
 use lettre::smtp::error::Error as LettreErr;
+use openssl::error::ErrorStack as OpSSLErr;
 
 #[derive(Display, Serialize)]
 pub struct Empty {}
@@ -75,6 +76,7 @@ make_error! {
     RegexError(RegexErr): _has_source, _api_error,
     YubiError(YubiErr):   _has_source, _api_error,
     LetreErr(LettreErr):  _has_source, _api_error,
+    OpSSLError(OpSSLErr): _has_source, _api_error,
 }
 
 // This is implemented by hand because NoneError doesn't implement neither Display nor Error
@@ -181,8 +183,9 @@ use rocket::http::{ContentType, Status};
 use rocket::request::Request;
 use rocket::response::{self, Responder, Response};
 
+#[rocket::async_trait]
 impl<'r> Responder<'r> for Error {
-    fn respond_to(self, _: &Request) -> response::Result<'r> {
+    async fn respond_to(self, _req: &'r Request<'_>) -> response::Result<'r> {
         match self.error {
             ErrorKind::EmptyError(_) => {} // Don't print the error in this situation
             _ => error!(target: "error", "{:#?}", self),
@@ -194,6 +197,7 @@ impl<'r> Responder<'r> for Error {
             .status(code)
             .header(ContentType::JSON)
             .sized_body(Cursor::new(format!("{}", self)))
+            .await
             .ok()
     }
 }
@@ -207,18 +211,6 @@ macro_rules! err {
         return Err(crate::error::Error::new($msg, $msg));
     }};
     ($usr_msg:expr, $log_value:expr) => {{
-        return Err(crate::error::Error::new($usr_msg, $log_value));
-    }};
-}
-
-#[macro_export]
-macro_rules! err_discard {
-    ($msg:expr, $data:expr) => {{
-        std::io::copy(&mut $data.open(), &mut std::io::sink()).ok();
-        return Err(crate::error::Error::new($msg, $msg));
-    }};
-    ($usr_msg:expr, $log_value:expr, $data:expr) => {{
-        std::io::copy(&mut $data.open(), &mut std::io::sink()).ok();
         return Err(crate::error::Error::new($usr_msg, $log_value));
     }};
 }

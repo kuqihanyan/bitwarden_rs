@@ -210,7 +210,12 @@ fn post_keys(data: JsonUpcase<KeysData>, headers: Headers, conn: DbConn) -> Json
     user.public_key = Some(data.PublicKey);
 
     user.save(&conn)?;
-    Ok(Json(user.to_json(&conn)))
+
+    Ok(Json(json!({
+        "PrivateKey": user.private_key,
+        "PublicKey": user.public_key,
+        "Object":"keys"
+    })))
 }
 
 #[derive(Deserialize)]
@@ -374,8 +379,8 @@ fn post_email_token(data: JsonUpcase<EmailTokenData>, headers: Headers, conn: Db
         err!("Email already in use");
     }
 
-    if !CONFIG.is_signup_allowed(&data.NewEmail) {
-        err!("Email cannot be changed to this address");
+    if !CONFIG.is_email_domain_allowed(&data.NewEmail) {
+        err!("Email domain not allowed");
     }
 
     let token = crypto::generate_token(6)?;

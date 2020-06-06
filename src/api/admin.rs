@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use serde_json::Value;
+use serde::de::DeserializeOwned;
 use std::process::Command;
 
 use rocket::http::{Cookie, Cookies, SameSite};
@@ -14,6 +15,7 @@ use crate::config::ConfigBuilder;
 use crate::db::{backup_database, models::*, DbConn};
 use crate::error::Error;
 use crate::mail;
+use crate::util::get_display_size;
 use crate::CONFIG;
 
 pub fn routes() -> Vec<Route> {
@@ -23,7 +25,7 @@ pub fn routes() -> Vec<Route> {
 
     routes![
         admin_login,
-        get_users,
+        get_users_json,
         post_admin_login,
         admin_page,
         invite_user,
@@ -36,6 +38,9 @@ pub fn routes() -> Vec<Route> {
         delete_config,
         backup_db,
         test_smtp,
+        users_overview,
+        organizations_overview,
+        diagnostics,
     ]
 }
 
@@ -55,6 +60,14 @@ const VERSION: Option<&str> = option_env!("BWRS_VERSION");
 
 fn admin_path() -> String {
     format!("{}{}", CONFIG.domain_path(), ADMIN_PATH)
+}
+
+/// Used for `Location` response headers, which must specify an absolute URI
+/// (see https://tools.ietf.org/html/rfc2616#section-14.30).
+fn admin_url() -> String {
+    // Don't use CONFIG.domain() directly, since the user may want to keep a
+    // trailing slash there, particularly when running under a subpath.
+    format!("{}{}{}", CONFIG.domain_origin(), CONFIG.domain_path(), ADMIN_PATH)
 }
 
 #[get("/", rank = 2)]
@@ -81,7 +94,7 @@ fn post_admin_login(data: Form<LoginForm>, mut cookies: Cookies, ip: ClientIp) -
     if !_validate_token(&data.token) {
         error!("Invalid admin token. IP: {}", ip.ip);
         Err(Flash::error(
-            Redirect::to(admin_path()),
+            Redirect::to(admin_url()),
             "Invalid admin token, please try again.",
         ))
     } else {
@@ -97,7 +110,7 @@ fn post_admin_login(data: Form<LoginForm>, mut cookies: Cookies, ip: ClientIp) -
             .finish();
 
         cookies.add(cookie);
-        Ok(Redirect::to(admin_path()))
+        Ok(Redirect::to(admin_url()))
     }
 }
 
@@ -112,7 +125,9 @@ fn _validate_token(token: &str) -> bool {
 struct AdminTemplateData {
     page_content: String,
     version: Option<&'static str>,
-    users: Vec<Value>,
+    users: Option<Vec<Value>>,
+    organizations: Option<Vec<Value>>,
+    diagnostics: Option<Value>,
     config: Value,
     can_backup: bool,
     logged_in: bool,
@@ -120,15 +135,59 @@ struct AdminTemplateData {
 }
 
 impl AdminTemplateData {
-    fn new(users: Vec<Value>) -> Self {
+    fn new() -> Self {
         Self {
-            page_content: String::from("admin/page"),
+            page_content: String::from("admin/settings"),
             version: VERSION,
-            users,
             config: CONFIG.prepare_json(),
             can_backup: *CAN_BACKUP,
             logged_in: true,
             urlpath: CONFIG.domain_path(),
+            users: None,
+            organizations: None,
+            diagnostics: None,
+        }
+    }
+
+    fn users(users: Vec<Value>) -> Self {
+        Self {
+            page_content: String::from("admin/users"),
+            version: VERSION,
+            users: Some(users),
+            config: CONFIG.prepare_json(),
+            can_backup: *CAN_BACKUP,
+            logged_in: true,
+            urlpath: CONFIG.domain_path(),
+            organizations: None,
+            diagnostics: None,
+        }
+    }
+
+    fn organizations(organizations: Vec<Value>) -> Self {
+        Self {
+            page_content: String::from("admin/organizations"),
+            version: VERSION,
+            organizations: Some(organizations),
+            config: CONFIG.prepare_json(),
+            can_backup: *CAN_BACKUP,
+            logged_in: true,
+            urlpath: CONFIG.domain_path(),
+            users: None,
+            diagnostics: None,
+        }
+    }
+
+    fn diagnostics(diagnostics: Value) -> Self {
+        Self {
+            page_content: String::from("admin/diagnostics"),
+            version: VERSION,
+            organizations: None,
+            config: CONFIG.prepare_json(),
+            can_backup: *CAN_BACKUP,
+            logged_in: true,
+            urlpath: CONFIG.domain_path(),
+            users: None,
+            diagnostics: Some(diagnostics),
         }
     }
 
@@ -138,11 +197,8 @@ impl AdminTemplateData {
 }
 
 #[get("/", rank = 1)]
-fn admin_page(_token: AdminToken, conn: DbConn) -> ApiResult<Html<String>> {
-    let users = User::get_all(&conn);
-    let users_json: Vec<Value> = users.iter().map(|u| u.to_json(&conn)).collect();
-
-    let text = AdminTemplateData::new(users_json).render()?;
+fn admin_page(_token: AdminToken, _conn: DbConn) -> ApiResult<Html<String>> {
+    let text = AdminTemplateData::new().render()?;
     Ok(Html(text))
 }
 
@@ -174,10 +230,9 @@ fn invite_user(data: Json<InviteData>, _token: AdminToken, conn: DbConn) -> Empt
 #[post("/test/smtp", data = "<data>")]
 fn test_smtp(data: Json<InviteData>, _token: AdminToken) -> EmptyResult {
     let data: InviteData = data.into_inner();
-    let email = data.email.clone();
 
     if CONFIG.mail_enabled() {
-        mail::send_test(&email)
+        mail::send_test(&data.email)
     } else {
         err!("Mail is not enabled")
     }
@@ -186,15 +241,31 @@ fn test_smtp(data: Json<InviteData>, _token: AdminToken) -> EmptyResult {
 #[get("/logout")]
 fn logout(mut cookies: Cookies) -> Result<Redirect, ()> {
     cookies.remove(Cookie::named(COOKIE_NAME));
-    Ok(Redirect::to(admin_path()))
+    Ok(Redirect::to(admin_url()))
 }
 
 #[get("/users")]
-fn get_users(_token: AdminToken, conn: DbConn) -> JsonResult {
+fn get_users_json(_token: AdminToken, conn: DbConn) -> JsonResult {
     let users = User::get_all(&conn);
     let users_json: Vec<Value> = users.iter().map(|u| u.to_json(&conn)).collect();
 
     Ok(Json(Value::Array(users_json)))
+}
+
+#[get("/users/overview")]
+fn users_overview(_token: AdminToken, conn: DbConn) -> ApiResult<Html<String>> {
+    let users = User::get_all(&conn);
+    let users_json: Vec<Value> = users.iter()
+    .map(|u| {
+        let mut usr = u.to_json(&conn);
+        usr["cipher_count"] = json!(Cipher::count_owned_by_user(&u.uuid, &conn));
+        usr["attachment_count"] = json!(Attachment::count_by_user(&u.uuid, &conn));
+        usr["attachment_size"] = json!(get_display_size(Attachment::size_by_user(&u.uuid, &conn) as i32));
+        usr
+    }).collect();
+
+    let text = AdminTemplateData::users(users_json).render()?;
+    Ok(Html(text))
 }
 
 #[post("/users/<uuid>/delete")]
@@ -235,6 +306,109 @@ fn remove_2fa(uuid: String, _token: AdminToken, conn: DbConn) -> EmptyResult {
 #[post("/users/update_revision")]
 fn update_revision_users(_token: AdminToken, conn: DbConn) -> EmptyResult {
     User::update_all_revisions(&conn)
+}
+
+#[get("/organizations/overview")]
+fn organizations_overview(_token: AdminToken, conn: DbConn) -> ApiResult<Html<String>> {
+    let organizations = Organization::get_all(&conn);
+    let organizations_json: Vec<Value> = organizations.iter().map(|o| {
+        let mut org = o.to_json();
+        org["user_count"] = json!(UserOrganization::count_by_org(&o.uuid, &conn));
+        org["cipher_count"] = json!(Cipher::count_by_org(&o.uuid, &conn));
+        org["attachment_count"] = json!(Attachment::count_by_org(&o.uuid, &conn));
+        org["attachment_size"] = json!(get_display_size(Attachment::size_by_org(&o.uuid, &conn) as i32));
+        org
+    }).collect();
+
+    let text = AdminTemplateData::organizations(organizations_json).render()?;
+    Ok(Html(text))
+}
+
+#[derive(Deserialize)]
+struct WebVaultVersion {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct GitRelease {
+    tag_name: String,
+}
+
+#[derive(Deserialize)]
+struct GitCommit {
+    sha: String,
+}
+
+fn get_github_api<T: DeserializeOwned>(url: &str) -> Result<T, Error> {
+    use reqwest::{header::USER_AGENT, blocking::Client};
+    use std::time::Duration;
+    let github_api = Client::builder().build()?;
+
+    Ok(
+        github_api.get(url)
+        .timeout(Duration::from_secs(10))
+        .header(USER_AGENT, "Bitwarden_RS")
+        .send()?
+        .error_for_status()?
+        .json::<T>()?
+    )
+}
+
+#[get("/diagnostics")]
+fn diagnostics(_token: AdminToken, _conn: DbConn) -> ApiResult<Html<String>> {
+    use std::net::ToSocketAddrs;
+    use chrono::prelude::*;
+    use crate::util::read_file_string;
+
+    let vault_version_path = format!("{}/{}", CONFIG.web_vault_folder(), "version.json");
+    let vault_version_str = read_file_string(&vault_version_path)?;
+    let web_vault_version: WebVaultVersion = serde_json::from_str(&vault_version_str)?;
+
+    let github_ips = ("github.com", 0).to_socket_addrs().map(|mut i| i.next());
+    let (dns_resolved, dns_ok) = match github_ips {
+        Ok(Some(a)) => (a.ip().to_string(), true),
+        _ => ("Could not resolve domain name.".to_string(), false),
+    };
+
+    // If the DNS Check failed, do not even attempt to check for new versions since we were not able to resolve github.com
+    let (latest_release, latest_commit, latest_web_build) = if dns_ok {
+        (
+            match get_github_api::<GitRelease>("https://api.github.com/repos/dani-garcia/bitwarden_rs/releases/latest") {
+                Ok(r) => r.tag_name,
+                _ => "-".to_string()
+            },
+            match get_github_api::<GitCommit>("https://api.github.com/repos/dani-garcia/bitwarden_rs/commits/master") {
+                Ok(mut c) => {
+                    c.sha.truncate(8);
+                    c.sha
+                },
+                _ => "-".to_string()
+            },
+            match get_github_api::<GitRelease>("https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest") {
+                Ok(r) => r.tag_name.trim_start_matches('v').to_string(),
+                _ => "-".to_string()
+            },
+        )
+    } else {
+        ("-".to_string(), "-".to_string(), "-".to_string())
+    };
+    
+    // Run the date check as the last item right before filling the json.
+    // This should ensure that the time difference between the browser and the server is as minimal as possible.
+    let dt = Utc::now();
+    let server_time = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let diagnostics_json = json!({
+        "dns_resolved": dns_resolved,
+        "server_time": server_time,
+        "web_vault_version": web_vault_version.version,
+        "latest_release": latest_release,
+        "latest_commit": latest_commit,
+        "latest_web_build": latest_web_build,
+    });
+
+    let text = AdminTemplateData::diagnostics(diagnostics_json).render()?;
+    Ok(Html(text))
 }
 
 #[post("/config", data = "<data>")]

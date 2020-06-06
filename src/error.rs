@@ -7,7 +7,6 @@ macro_rules! make_error {
     ( $( $name:ident ( $ty:ty ): $src_fn:expr, $usr_msg_fun:expr ),+ $(,)? ) => {
         const BAD_REQUEST: u16 = 400;
 
-        #[derive(Display)]
         pub enum ErrorKind { $($name( $ty )),+ }
         pub struct Error { message: String, error: ErrorKind, error_code: u16 }
 
@@ -46,9 +45,13 @@ use std::option::NoneError as NoneErr;
 use std::time::SystemTimeError as TimeErr;
 use u2f::u2ferror::U2fError as U2fErr;
 use yubico::yubicoerror::YubicoError as YubiErr;
-use lettre::smtp::error::Error as LettreErr;
 
-#[derive(Display, Serialize)]
+use lettre::address::AddressError as AddrErr;
+use lettre::error::Error as LettreErr;
+use lettre::message::mime::FromStrError as FromStrErr;
+use lettre::transport::smtp::error::Error as SmtpErr;
+
+#[derive(Serialize)]
 pub struct Empty {}
 
 // Error struct
@@ -74,7 +77,11 @@ make_error! {
     ReqError(ReqErr):     _has_source, _api_error,
     RegexError(RegexErr): _has_source, _api_error,
     YubiError(YubiErr):   _has_source, _api_error,
-    LetreErr(LettreErr):  _has_source, _api_error,
+
+    LetreError(LettreErr):    _has_source, _api_error,
+    AddressError(AddrErr):    _has_source, _api_error,
+    SmtpError(SmtpErr):       _has_source, _api_error,
+    FromStrError(FromStrErr): _has_source, _api_error,
 }
 
 // This is implemented by hand because NoneError doesn't implement neither Display nor Error
@@ -118,7 +125,7 @@ impl Error {
         self
     }
 
-    pub fn with_code(mut self, code: u16) -> Self {
+    pub const fn with_code(mut self, code: u16) -> Self {
         self.error_code = code;
         self
     }
@@ -146,7 +153,7 @@ impl<S> MapResult<S> for Option<S> {
     }
 }
 
-fn _has_source<T>(e: T) -> Option<T> {
+const fn _has_source<T>(e: T) -> Option<T> {
     Some(e)
 }
 fn _no_source<T, S>(_: T) -> Option<S> {

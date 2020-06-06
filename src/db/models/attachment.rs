@@ -18,7 +18,7 @@ pub struct Attachment {
 
 /// Local methods
 impl Attachment {
-    pub fn new(id: String, cipher_uuid: String, file_name: String, file_size: i32) -> Self {
+    pub const fn new(id: String, cipher_uuid: String, file_name: String, file_size: i32) -> Self {
         Self {
             id,
             cipher_uuid,
@@ -52,7 +52,6 @@ impl Attachment {
 
 use crate::db::schema::{attachments, ciphers};
 use crate::db::DbConn;
-use diesel;
 use diesel::prelude::*;
 
 use crate::api::EmptyResult;
@@ -131,6 +130,16 @@ impl Attachment {
         result.unwrap_or(0)
     }
 
+    pub fn count_by_user(user_uuid: &str, conn: &DbConn) -> i64 {
+        attachments::table
+            .left_join(ciphers::table.on(ciphers::uuid.eq(attachments::cipher_uuid)))
+            .filter(ciphers::user_uuid.eq(user_uuid))
+            .count()
+            .first::<i64>(&**conn)
+            .ok()
+            .unwrap_or(0)
+    }
+
     pub fn size_by_org(org_uuid: &str, conn: &DbConn) -> i64 {
         let result: Option<i64> = attachments::table
             .left_join(ciphers::table.on(ciphers::uuid.eq(attachments::cipher_uuid)))
@@ -140,5 +149,15 @@ impl Attachment {
             .expect("Error loading user attachment total size");
 
         result.unwrap_or(0)
+    }
+
+    pub fn count_by_org(org_uuid: &str, conn: &DbConn) -> i64 {
+        attachments::table
+            .left_join(ciphers::table.on(ciphers::uuid.eq(attachments::cipher_uuid)))
+            .filter(ciphers::organization_uuid.eq(org_uuid))
+            .count()
+            .first(&**conn)
+            .ok()
+            .unwrap_or(0)
     }
 }

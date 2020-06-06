@@ -135,7 +135,6 @@ macro_rules! make_config {
                     (inner._env.build(), inner.config.clone())
                 };
 
-
                 fn _get_form_type(rust_type: &str) -> &'static str {
                     match rust_type {
                         "Pass" => "password",
@@ -559,9 +558,10 @@ impl Config {
         self.update_config(builder)
     }
 
-    /// Tests whether an email's domain is in signups_domains_whitelist.
-    /// Returns false if no whitelist is set.
-    pub fn is_email_domain_whitelisted(&self, email: &str) -> bool {
+    /// Tests whether an email's domain is allowed. A domain is allowed if it
+    /// is in signups_domains_whitelist, or if no whitelist is set (so there
+    /// are no domain restrictions in effect).
+    pub fn is_email_domain_allowed(&self, email: &str) -> bool {
         let e: Vec<&str> = email.rsplitn(2, '@').collect();
         if e.len() != 2 || e[0].is_empty() || e[1].is_empty() {
             warn!("Failed to parse email address '{}'", email);
@@ -570,7 +570,7 @@ impl Config {
         let email_domain = e[0].to_lowercase();
         let whitelist = self.signups_domains_whitelist();
 
-        !whitelist.is_empty() && whitelist.split(',').any(|d| d.trim() == email_domain)
+        whitelist.is_empty() || whitelist.split(',').any(|d| d.trim() == email_domain)
     }
 
     /// Tests whether signup is allowed for an email address, taking into
@@ -578,7 +578,7 @@ impl Config {
     pub fn is_signup_allowed(&self, email: &str) -> bool {
         if !self.signups_domains_whitelist().is_empty() {
             // The whitelist setting overrides the signups_allowed setting.
-            self.is_email_domain_whitelisted(email)
+            self.is_email_domain_allowed(email)
         } else {
             self.signups_allowed()
         }
@@ -640,7 +640,7 @@ impl Config {
     pub fn is_admin_token_set(&self) -> bool {
         let token = self.admin_token();
 
-        !token.is_none() && !token.unwrap().trim().is_empty()
+        token.is_some() && !token.unwrap().trim().is_empty()
     }
 
     pub fn render_template<T: serde::ser::Serialize>(
@@ -700,7 +700,10 @@ where
 
     reg!("admin/base");
     reg!("admin/login");
-    reg!("admin/page");
+    reg!("admin/settings");
+    reg!("admin/users");
+    reg!("admin/organizations");
+    reg!("admin/diagnostics");
 
     // And then load user templates to overwrite the defaults
     // Use .hbs extension for the files

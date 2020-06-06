@@ -1,4 +1,5 @@
-#![feature(proc_macro_hygiene, vec_remove_item, try_trait, ip)]
+#![forbid(unsafe_code)]
+#![feature(proc_macro_hygiene, try_trait, ip)]
 #![recursion_limit = "256"]
 
 extern crate openssl;
@@ -14,12 +15,6 @@ extern crate log;
 extern crate diesel;
 #[macro_use]
 extern crate diesel_migrations;
-#[macro_use]
-extern crate derive_more;
-#[macro_use]
-extern crate num_derive;
-
-extern crate backtrace;
 
 use std::{
     fs::create_dir_all,
@@ -108,7 +103,10 @@ fn launch_info() {
     println!("|--------------------------------------------------------------------|");
     println!("| This is an *unofficial* Bitwarden implementation, DO NOT use the   |");
     println!("| official channels to report bugs/features, regardless of client.   |");
-    println!("| Report URL: https://github.com/dani-garcia/bitwarden_rs/issues/new |");
+    println!("| Send usage/configuration questions or feature requests to:         |");
+    println!("|   https://bitwardenrs.discourse.group/                             |");
+    println!("| Report suspected bugs/issues in the software itself at:            |");
+    println!("|   https://github.com/dani-garcia/bitwarden_rs/issues/new           |");
     println!("\\--------------------------------------------------------------------/\n");
 }
 

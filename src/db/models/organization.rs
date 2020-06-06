@@ -34,7 +34,7 @@ pub enum UserOrgStatus {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-#[derive(FromPrimitive)]
+#[derive(num_derive::FromPrimitive)]
 pub enum UserOrgType {
     Owner = 0,
     Admin = 1,
@@ -165,9 +165,9 @@ impl Organization {
             "UsePolicies": true,
 
             "BusinessName": null,
-            "BusinessAddress1":	null,
-            "BusinessAddress2":	null,
-            "BusinessAddress3":	null,
+            "BusinessAddress1": null,
+            "BusinessAddress2": null,
+            "BusinessAddress3": null,
             "BusinessCountry": null,
             "BusinessTaxNumber": null,
 
@@ -198,7 +198,6 @@ impl UserOrganization {
 
 use crate::db::schema::{ciphers_collections, organizations, users_collections, users_organizations};
 use crate::db::DbConn;
-use diesel;
 use diesel::prelude::*;
 
 use crate::api::EmptyResult;
@@ -256,6 +255,10 @@ impl Organization {
             .first::<Self>(&**conn)
             .ok()
     }
+
+    pub fn get_all(conn: &DbConn) -> Vec<Self> {
+        organizations::table.load::<Self>(&**conn).expect("Error loading organizations")
+    }
 }
 
 impl UserOrganization {
@@ -275,6 +278,8 @@ impl UserOrganization {
             "UseGroups": false,
             "UseTotp": true,
             "UsePolicies": true,
+            "UseApi": false,
+            "SelfHost": true,
 
             "MaxStorageGb": 10, // The value doesn't matter, we don't check server-side
 
@@ -305,7 +310,7 @@ impl UserOrganization {
         })
     }
 
-    pub fn to_json_collection_user_details(&self, read_only: bool) -> Value {
+    pub fn to_json_read_only(&self, read_only: bool) -> Value {
         json!({
             "Id": self.uuid,
             "ReadOnly": read_only
@@ -430,6 +435,15 @@ impl UserOrganization {
             .filter(users_organizations::org_uuid.eq(org_uuid))
             .load::<Self>(&**conn)
             .expect("Error loading user organizations")
+    }
+
+    pub fn count_by_org(org_uuid: &str, conn: &DbConn) -> i64 {
+        users_organizations::table
+            .filter(users_organizations::org_uuid.eq(org_uuid))
+            .count()
+            .first::<i64>(&**conn)
+            .ok()
+            .unwrap_or(0)
     }
 
     pub fn find_by_org_and_type(org_uuid: &str, atype: i32, conn: &DbConn) -> Vec<Self> {
